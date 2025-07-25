@@ -4,9 +4,9 @@ use goose::config::Config;
 use goose::message::{Message, MessageContent, ToolRequest, ToolResponse};
 use goose::providers::pricing::get_model_pricing;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use mcp_core::prompt::PromptArgument;
 use mcp_core::tool::ToolCall;
 use regex::Regex;
+use rmcp::model::PromptArgument;
 use serde_json::Value;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -219,6 +219,7 @@ fn render_tool_request(req: &ToolRequest, theme: Theme, debug: bool) {
         Ok(call) => match call.name.as_str() {
             "developer__text_editor" => render_text_editor_request(call, debug),
             "developer__shell" => render_shell_request(call, debug),
+            "dynamic_task__create_task" => render_dynamic_task_request(call, debug),
             _ => render_default_request(call, debug),
         },
         Err(e) => print_markdown(&e.to_string(), theme),
@@ -232,7 +233,7 @@ fn render_tool_response(resp: &ToolResponse, theme: Theme, debug: bool) {
         Ok(contents) => {
             for content in contents {
                 if let Some(audience) = content.audience() {
-                    if !audience.contains(&mcp_core::role::Role::User) {
+                    if !audience.contains(&rmcp::model::Role::User) {
                         continue;
                     }
                 }
@@ -252,7 +253,7 @@ fn render_tool_response(resp: &ToolResponse, theme: Theme, debug: bool) {
 
                 if debug {
                     println!("{:#?}", content);
-                } else if let mcp_core::content::Content::Text(text) = content {
+                } else if let Some(text) = content.as_text() {
                     print_markdown(&text.text, theme);
                 }
             }
@@ -390,6 +391,37 @@ fn render_shell_request(call: &ToolCall, debug: bool) {
         }
         _ => print_params(&call.arguments, 0, debug),
     }
+}
+
+fn render_dynamic_task_request(call: &ToolCall, debug: bool) {
+    print_tool_header(call);
+
+    // Print task_parameters array
+    if let Some(Value::Array(task_parameters)) = call.arguments.get("task_parameters") {
+        println!("{}:", style("task_parameters").dim());
+
+        for task_param in task_parameters.iter() {
+            println!("    -");
+
+            if let Some(param_obj) = task_param.as_object() {
+                for (key, value) in param_obj {
+                    match value {
+                        Value::String(s) => {
+                            // For strings, print the full content without truncation
+                            println!("        {}: {}", style(key).dim(), style(s).green());
+                        }
+                        _ => {
+                            // For everything else, use print_params
+                            print!("        ");
+                            print_params(value, 0, debug);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    println!();
 }
 
 fn render_default_request(call: &ToolCall, debug: bool) {

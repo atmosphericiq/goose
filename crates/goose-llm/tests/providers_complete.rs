@@ -1,5 +1,5 @@
 use anyhow::Result;
-use dotenv::dotenv;
+use dotenvy::dotenv;
 use goose_llm::message::{Message, MessageContent};
 use goose_llm::providers::base::Provider;
 use goose_llm::providers::errors::ProviderError;
@@ -157,7 +157,7 @@ impl ProviderTester {
             .content
             .iter()
             .filter_map(|message| message.as_tool_request())
-            .last()
+            .next_back()
             .expect("got tool request")
             .id;
 
