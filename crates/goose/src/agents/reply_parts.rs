@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use async_stream::try_stream;
 use futures::stream::StreamExt;
+use tracing::debug;
 
 use super::super::agents::Agent;
-use crate::agents::router_tool_selector::RouterToolSelectionStrategy;
 use crate::conversation::message::{Message, MessageContent, ToolRequest};
 use crate::conversation::Conversation;
 use crate::providers::base::{stream_from_single_message, MessageStream, Provider, ProviderUsage};
@@ -35,24 +35,17 @@ async fn toolshim_postprocess(
 impl Agent {
     /// Prepares tools and system prompt for a provider request
     pub async fn prepare_tools_and_prompt(&self) -> anyhow::Result<(Vec<Tool>, Vec<Tool>, String)> {
-        // Get tool selection strategy from config
-        let tool_selection_strategy = self
-            .tool_route_manager
-            .get_router_tool_selection_strategy()
-            .await;
+        // Get router enabled status
+        let router_enabled = self.tool_route_manager.is_router_enabled().await;
 
         // Get tools from extension manager
-        let mut tools = match tool_selection_strategy {
-            Some(RouterToolSelectionStrategy::Vector) => {
-                self.list_tools_for_router(Some(RouterToolSelectionStrategy::Vector))
-                    .await
-            }
-            Some(RouterToolSelectionStrategy::Llm) => {
-                self.list_tools_for_router(Some(RouterToolSelectionStrategy::Llm))
-                    .await
-            }
-            _ => self.list_tools(None).await,
-        };
+        let mut tools = self.list_tools_for_router().await;
+
+        // If router is disabled and no tools were returned, fall back to regular tools
+        if !router_enabled && tools.is_empty() {
+            tools = self.list_tools(None).await;
+        }
+
         // Add frontend tools
         let frontend_tools = self.frontend_tools.lock().await;
         for frontend_tool in frontend_tools.values() {
@@ -60,8 +53,7 @@ impl Agent {
         }
 
         // Prepare system prompt
-        let extension_manager = self.extension_manager.read().await;
-        let extensions_info = extension_manager.get_extensions_info().await;
+        let extensions_info = self.extension_manager.get_extensions_info().await;
 
         // Get model name from provider
         let provider = self.provider().await?;
@@ -72,9 +64,11 @@ impl Agent {
         let mut system_prompt = prompt_manager.build_system_prompt(
             extensions_info,
             self.frontend_instructions.lock().await.clone(),
-            extension_manager.suggest_disable_extensions_prompt().await,
+            self.extension_manager
+                .suggest_disable_extensions_prompt()
+                .await,
             Some(model_name),
-            tool_selection_strategy,
+            router_enabled,
         );
 
         // Handle toolshim if enabled
@@ -180,14 +174,18 @@ impl Agent {
         let provider = provider.clone();
 
         let mut stream = if provider.supports_streaming() {
-            provider
+            debug!("WAITING_LLM_STREAM_START");
+            let msg_stream = provider
                 .stream(
                     system_prompt.as_str(),
                     messages_for_provider.messages(),
                     &tools,
                 )
-                .await?
+                .await?;
+            debug!("WAITING_LLM_STREAM_END");
+            msg_stream
         } else {
+            debug!("WAITING_LLM_START");
             let (message, mut usage) = provider
                 .complete(
                     system_prompt.as_str(),
@@ -195,6 +193,7 @@ impl Agent {
                     &tools,
                 )
                 .await?;
+            debug!("WAITING_LLM_END");
 
             // Ensure we have token counts for non-streaming case
             usage
