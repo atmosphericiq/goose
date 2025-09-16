@@ -434,9 +434,10 @@ let envToggles: EnvToggles = loadSettings().envToggles;
 
 // Parse command line arguments
 const parseArgs = () => {
-  const args = process.argv.slice(2); // Remove first two elements (electron and script path)
   let dirPath = null;
 
+  // Remove first two elements in dev mode (electron and script path)
+  const args = !dirPath && app.isPackaged ? process.argv : process.argv.slice(2);
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--dir' && i + 1 < args.length) {
       dirPath = args[i + 1];
@@ -1675,7 +1676,7 @@ const registerGlobalHotkey = (accelerator: string) => {
   }
 };
 
-app.whenReady().then(async () => {
+async function appMain() {
   // Ensure Windows shims are available before any MCP processes are spawned
   await ensureWinShims();
 
@@ -2144,6 +2145,15 @@ app.whenReady().then(async () => {
       return false;
     }
   });
+}
+
+app.whenReady().then(async () => {
+  try {
+    await appMain();
+  } catch (error) {
+    dialog.showErrorBox('Goose Error', `Failed to create main window: ${error}`);
+    app.quit();
+  }
 });
 
 async function getAllowList(): Promise<string[]> {
